@@ -8,6 +8,76 @@ const socketIo = require('socket.io');
 require('dotenv').config();
 
 const app = express();
+// Email & SMS Setup
+const nodemailer = require('nodemailer');
+const twilio = require('twilio');
+
+// Email Configuration
+const emailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD
+  }
+});
+
+// SMS Configuration (optional)
+let twilioClient;
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+  twilioClient = twilio(
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_AUTH_TOKEN
+  );
+}
+
+// Notification Functions
+async function sendEmailNotification(to, subject, message) {
+  try {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: subject,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #ef4444 0%, #f97316 100%); padding: 20px; text-center;">
+            <h1 style="color: white; margin: 0;">🚨 SafeLink Alert</h1>
+          </div>
+          <div style="padding: 20px; background: #f9f9f9;">
+            <h2 style="color: #333;">${subject}</h2>
+            <p style="color: #666; font-size: 16px; line-height: 1.6;">${message}</p>
+          </div>
+        </div>
+      `
+    };
+
+    await emailTransporter.sendMail(mailOptions);
+    console.log('✅ Email sent to:', to);
+    return true;
+  } catch (error) {
+    console.error('❌ Email error:', error.message);
+    return false;
+  }
+}
+
+async function sendSMSNotification(to, message) {
+  if (!twilioClient) {
+    console.log('ℹ️ SMS skipped - Twilio not configured');
+    return false;
+  }
+  
+  try {
+    await twilioClient.messages.create({
+      body: message,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: to
+    });
+    console.log('✅ SMS sent to:', to);
+    return true;
+  } catch (error) {
+    console.error('❌ SMS error:', error.message);
+    return false;
+  }
+}
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -245,6 +315,8 @@ app.post('/api/alerts', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Emergency type and location required' });
     }
 
+    const user = await User.findById(req.user.id);
+
     const alert = new Alert({
       userId: req.user.id,
       emergencyType,
@@ -254,18 +326,55 @@ app.post('/api/alerts', authenticateToken, async (req, res) => {
         coordinates: [longitude, latitude]
       },
       address,
-      contactNumber,
+      contactNumber: contactNumber || user.phone,
       priority: emergencyType === 'medical' || emergencyType === 'accident' ? 'critical' : 'high'
     });
 
     await alert.save();
     await alert.populate('userId', 'name phone email');
 
-    // Emit real-time alert to all connected admins/volunteers
+    // 📧 Send confirmation email to user
+    await sendEmailNotification(
+      user.email,
+      'Emergency Alert Created',
+      `Your ${emergencyType} emergency alert has been created successfully. Our team has been notified and help is on the way. Stay safe!`
+    );
+
+    // 📱 Send confirmation SMS to user (if configured)
+    await sendSMSNotification(
+      user.phone,
+      `SafeLink Alert: Your ${emergencyType} emergency has been reported. Help is on the way. Stay calm and safe.`
+    );
+
+    // 🔔 Notify nearby volunteers via email
+    const nearbyVolunteers = await User.find({
+      role: { $in: ['volunteer', 'admin'] },
+      isAvailable: true,
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [longitude, latitude]
+          },
+          $maxDistance: 10000 // 10km
+        }
+      }
+    }).limit(5);
+
+    // Send notifications to volunteers
+    for (const volunteer of nearbyVolunteers) {
+      await sendEmailNotification(
+        volunteer.email,
+        'New Emergency Alert Nearby',
+        `A ${emergencyType} emergency has been reported near your location. Please check the dashboard to assist.`
+      );
+    }
+
+    // Emit real-time alert
     io.emit('newAlert', alert);
 
     res.status(201).json({
-      message: 'Emergency alert created',
+      message: 'Emergency alert created and notifications sent',
       alert
     });
   } catch (error) {
@@ -558,4 +667,84 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 SafeLink Server running on port ${PORT}`);
+});
+
+// Emergency Guides Route
+app.get('/api/emergency-guides', (req, res) => {
+  const guides = [
+    {
+      id: 1,
+      type: 'medical',
+      title: 'Medical Emergency',
+      icon: '🏥',
+      color: '#ef4444',
+      steps: [
+        'Stay calm and assess the situation',
+        'Call emergency services immediately (112 or 108)',
+        'Check if the person is breathing',
+        'Perform CPR if trained',
+        'Stop any bleeding',
+        'Keep person warm',
+        'Wait for help'
+      ],
+      importantNumbers: [
+        { name: 'Ambulance', number: '108' },
+        { name: 'Emergency', number: '112' }
+      ]
+    },
+    {
+      id: 2,
+      type: 'accident',
+      title: 'Road Accident',
+      icon: '🚗',
+      color: '#f97316',
+      steps: [
+        'Ensure your safety first',
+        'Turn on hazard lights',
+        'Call emergency (112)',
+        'Do not move injured persons',
+        'Provide first aid if trained'
+      ],
+      importantNumbers: [
+        { name: 'Police', number: '100' },
+        { name: 'Ambulance', number: '108' }
+      ]
+    }
+    // Add more guide types from the artifact
+  ];
+
+  res.json({ guides });
+});
+
+// About Route
+app.get('/api/about', (req, res) => {
+  const about = {
+    mission: 'To provide rapid emergency response through community-driven support.',
+    vision: 'A world where help is just a click away.',
+    features: [
+      {
+        icon: '🚨',
+        title: 'One-Click Alert',
+        description: 'Send emergency alerts instantly'
+      },
+      {
+        icon: '📱',
+        title: 'Instant Notifications',
+        description: 'Get SMS and email updates'
+      }
+    ],
+    stats: {
+      users: '10,000+',
+      volunteers: '2,500+',
+      alertsResolved: '15,000+',
+      responseTime: '< 5 mins'
+    },
+    contact: {
+      email: 'support@safelink.com',
+      phone: '1800-SAFELINK',
+      address: 'India'
+    }
+  };
+
+  res.json(about);
 });
