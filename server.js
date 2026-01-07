@@ -610,6 +610,22 @@ app.put('/api/volunteers/location', authenticateToken, async (req, res) => {
   }
 });
 
+
+app.get('/api/nearby-hospitals', async (req, res) => {
+  const { lat, lng } = req.query;
+
+  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json
+  ?location=${lat},${lng}
+  &radius=3000
+  &type=hospital
+  &key=${process.env.GOOGLE_API_KEY}`;
+
+  const response = await fetch(url);
+  const data = await response.json();
+  res.json(data.results);
+});
+
+
 // ==================== STATS ====================
 
 app.get('/api/stats', authenticateToken, isAdmin, async (req, res) => {
@@ -670,6 +686,53 @@ server.listen(PORT, () => {
 });
 
 // Emergency Guides Route
+app.get('/api/emergency-guides', (req, res) => {
+  const guides = [
+    {
+      id: 1,
+      type: 'medical',
+      title: 'Medical Emergency',
+      icon: '🏥',
+      color: '#ef4444',
+      steps: [
+        'Stay calm and assess the situation',
+        'Call emergency services immediately (112 or 108)',
+        'Check if the person is breathing',
+        'Perform CPR if trained',
+        'Stop any bleeding',
+        'Keep person warm',
+        'Wait for help'
+      ],
+      importantNumbers: [
+        { name: 'Ambulance', number: '108' },
+        { name: 'Emergency', number: '112' }
+      ]
+    },
+    {
+      id: 2,
+      type: 'accident',
+      title: 'Road Accident',
+      icon: '🚗',
+      color: '#f97316',
+      steps: [
+        'Ensure your safety first',
+        'Turn on hazard lights',
+        'Call emergency (112)',
+        'Do not move injured persons',
+        'Provide first aid if trained'
+      ],
+      importantNumbers: [
+        { name: 'Police', number: '100' },
+        { name: 'Ambulance', number: '108' }
+      ]
+    }
+    // Add more guide types from the artifact
+  ];
+
+  res.json({ guides });
+});
+
+/// Emergency Guides Route
 app.get('/api/emergency-guides', (req, res) => {
   const guides = [
     {
