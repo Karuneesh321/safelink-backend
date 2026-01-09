@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const http = require('http');
 const socketIo = require('socket.io');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -81,7 +82,7 @@ async function sendSMSNotification(to, message) {
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000', // ✅ Changed from 3001 to 3000
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -581,6 +582,313 @@ app.get('/api/volunteers/nearby', authenticateToken, async (req, res) => {
   }
 });
 
+
+
+
+
+
+// ==================== OPENSTREETMAP API ROUTES (FREE!) ====================
+
+// Get Nearby Hospitals
+app.get('/api/places/hospitals', async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 5 } = req.query;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({ message: 'Location required' });
+    }
+
+    const query = `
+      [out:json][timeout:25];
+      (
+        node["amenity"="hospital"](around:${radius * 1000},${latitude},${longitude});
+        way["amenity"="hospital"](around:${radius * 1000},${latitude},${longitude});
+      );
+      out body;
+      >;
+      out skel qt;
+    `;
+
+    const response = await axios.post(
+      'https://overpass-api.de/api/interpreter',
+      query,
+      { 
+        headers: { 'Content-Type': 'text/plain' },
+        timeout: 60000
+      }
+    );
+
+    const hospitals = response.data.elements
+      .filter(place => place.tags)
+      .map(place => ({
+        id: place.id,
+        name: place.tags.name || 'Hospital',
+        address: place.tags['addr:full'] || place.tags['addr:street'] || place.tags['addr:city'] || 'Address not available',
+        location: {
+          lat: place.lat || place.center?.lat,
+          lng: place.lon || place.center?.lon
+        },
+        phone: place.tags.phone || place.tags['contact:phone'] || 'N/A',
+        type: 'hospital',
+        distance: calculateDistance(
+          latitude,
+          longitude,
+          place.lat || place.center?.lat,
+          place.lon || place.center?.lon
+        )
+      }))
+      .filter(h => h.location.lat && h.location.lng);
+
+    hospitals.sort((a, b) => a.distance - b.distance);
+
+    res.json({ 
+      hospitals: hospitals.slice(0, 10),
+      count: hospitals.length 
+    });
+  } catch (error) {
+    console.error('OSM API error:', error.message);
+    res.status(500).json({ message: 'Error fetching hospitals', error: error.message });
+  }
+});
+
+// Get Nearby Police Stations
+app.get('/api/places/police', async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 5 } = req.query;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({ message: 'Location required' });
+    }
+
+    const query = `
+      [out:json][timeout:25];
+      (
+        node["amenity"="police"](around:${radius * 1000},${latitude},${longitude});
+        way["amenity"="police"](around:${radius * 1000},${latitude},${longitude});
+      );
+      out body;
+      >;
+      out skel qt;
+    `;
+
+    const response = await axios.post(
+      'https://overpass-api.de/api/interpreter',
+      query,
+      { 
+        headers: { 'Content-Type': 'text/plain' },
+        timeout: 60000
+      }
+    );
+
+    const policeStations = response.data.elements
+      .filter(place => place.tags)
+      .map(place => ({
+        id: place.id,
+        name: place.tags.name || 'Police Station',
+        address: place.tags['addr:full'] || place.tags['addr:street'] || place.tags['addr:city'] || 'Address not available',
+        location: {
+          lat: place.lat || place.center?.lat,
+          lng: place.lon || place.center?.lon
+        },
+        phone: place.tags.phone || place.tags['contact:phone'] || 'N/A',
+        type: 'police',
+        distance: calculateDistance(
+          latitude,
+          longitude,
+          place.lat || place.center?.lat,
+          place.lon || place.center?.lon
+        )
+      }))
+      .filter(p => p.location.lat && p.location.lng);
+
+    policeStations.sort((a, b) => a.distance - b.distance);
+
+    res.json({ 
+      policeStations: policeStations.slice(0, 10),
+      count: policeStations.length 
+    });
+  } catch (error) {
+    console.error('OSM API error:', error.message);
+    res.status(500).json({ message: 'Error fetching police stations', error: error.message });
+  }
+});
+
+// Get Nearby Pharmacies
+app.get('/api/places/pharmacies', async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 3 } = req.query;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({ message: 'Location required' });
+    }
+
+    const query = `
+      [out:json][timeout:25];
+      (
+        node["amenity"="pharmacy"](around:${radius * 1000},${latitude},${longitude});
+        way["amenity"="pharmacy"](around:${radius * 1000},${latitude},${longitude});
+      );
+      out body;
+      >;
+      out skel qt;
+    `;
+
+    const response = await axios.post(
+      'https://overpass-api.de/api/interpreter',
+      query,
+      { 
+        headers: { 'Content-Type': 'text/plain' },
+        timeout: 60000
+      }
+    );
+
+    const pharmacies = response.data.elements
+      .filter(place => place.tags)
+      .map(place => ({
+        id: place.id,
+        name: place.tags.name || 'Pharmacy',
+        address: place.tags['addr:full'] || place.tags['addr:street'] || place.tags['addr:city'] || 'Address not available',
+        location: {
+          lat: place.lat || place.center?.lat,
+          lng: place.lon || place.center?.lon
+        },
+        phone: place.tags.phone || place.tags['contact:phone'] || 'N/A',
+        opening_hours: place.tags.opening_hours || 'N/A',
+        type: 'pharmacy',
+        distance: calculateDistance(
+          latitude,
+          longitude,
+          place.lat || place.center?.lat,
+          place.lon || place.center?.lon
+        )
+      }))
+      .filter(p => p.location.lat && p.location.lng);
+
+    pharmacies.sort((a, b) => a.distance - b.distance);
+
+    res.json({ 
+      pharmacies: pharmacies.slice(0, 10),
+      count: pharmacies.length 
+    });
+  } catch (error) {
+    console.error('OSM API error:', error.message);
+    res.status(500).json({ message: 'Error fetching pharmacies', error: error.message });
+  }
+});
+
+// Get All Emergency Services
+app.get('/api/places/emergency-services', async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 5 } = req.query;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({ message: 'Location required' });
+    }
+
+    const query = `
+      [out:json][timeout:25];
+      (
+        node["amenity"="hospital"](around:${radius * 1000},${latitude},${longitude});
+        way["amenity"="hospital"](around:${radius * 1000},${latitude},${longitude});
+        node["amenity"="police"](around:${radius * 1000},${latitude},${longitude});
+        way["amenity"="police"](around:${radius * 1000},${latitude},${longitude});
+        node["amenity"="pharmacy"](around:${radius * 1000},${latitude},${longitude});
+        way["amenity"="pharmacy"](around:${radius * 1000},${latitude},${longitude});
+      );
+      out body;
+      >;
+      out skel qt;
+    `;
+
+    const response = await axios.post(
+      'https://overpass-api.de/api/interpreter',
+      query,
+      { 
+        headers: { 'Content-Type': 'text/plain' },
+        timeout: 60000
+      }
+    );
+
+    const mapResults = (elements, amenityType) => {
+      return elements
+        .filter(place => place.tags && place.tags.amenity === amenityType)
+        .map(place => ({
+          id: place.id,
+          name: place.tags.name || `${amenityType.charAt(0).toUpperCase() + amenityType.slice(1)}`,
+          address: place.tags['addr:full'] || place.tags['addr:street'] || place.tags['addr:city'] || 'Address not available',
+          type: amenityType,
+          location: {
+            lat: place.lat || place.center?.lat,
+            lng: place.lon || place.center?.lon
+          },
+          phone: place.tags.phone || place.tags['contact:phone'] || 'N/A',
+          distance: calculateDistance(
+            latitude,
+            longitude,
+            place.lat || place.center?.lat,
+            place.lon || place.center?.lon
+          )
+        }))
+        .filter(item => item.location.lat && item.location.lng);
+    };
+
+    const hospitals = mapResults(response.data.elements, 'hospital');
+    const police = mapResults(response.data.elements, 'police');
+    const pharmacies = mapResults(response.data.elements, 'pharmacy');
+
+    hospitals.sort((a, b) => a.distance - b.distance);
+    police.sort((a, b) => a.distance - b.distance);
+    pharmacies.sort((a, b) => a.distance - b.distance);
+
+    res.json({
+      hospitals: hospitals.slice(0, 5),
+      police: police.slice(0, 5),
+      pharmacies: pharmacies.slice(0, 5),
+      total: hospitals.length + police.length + pharmacies.length
+    });
+  } catch (error) {
+    console.error('OSM API error:', error.message);
+    res.status(500).json({ message: 'Error fetching emergency services', error: error.message });
+  }
+});
+
+// Helper function to calculate distance (KEEP THIS!)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c;
+  return Math.round(distance * 10) / 10;
+}
+
+
+
+
+// Helper function to calculate distance
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c; // Distance in km
+  return Math.round(distance * 10) / 10; // Round to 1 decimal
+}
+
+
+
+
+
+
+
 // Update Volunteer Location
 app.put('/api/volunteers/location', authenticateToken, async (req, res) => {
   try {
@@ -611,19 +919,7 @@ app.put('/api/volunteers/location', authenticateToken, async (req, res) => {
 });
 
 
-app.get('/api/nearby-hospitals', async (req, res) => {
-  const { lat, lng } = req.query;
 
-  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json
-  ?location=${lat},${lng}
-  &radius=3000
-  &type=hospital
-  &key=${process.env.GOOGLE_API_KEY}`;
-
-  const response = await fetch(url);
-  const data = await response.json();
-  res.json(data.results);
-});
 
 
 // ==================== STATS ====================
@@ -725,16 +1021,8 @@ app.get('/api/emergency-guides', (req, res) => {
         { name: 'Police', number: '100' },
         { name: 'Ambulance', number: '108' }
       ]
-    }
-    // Add more guide types from the artifact
-  ];
+    },
 
-  res.json({ guides });
-});
-
-/// Emergency Guides Route
-app.get('/api/emergency-guides', (req, res) => {
-  const guides = [
     {
       id: 1,
       type: 'medical',
@@ -778,6 +1066,7 @@ app.get('/api/emergency-guides', (req, res) => {
 
   res.json({ guides });
 });
+
 
 // About Route
 app.get('/api/about', (req, res) => {
