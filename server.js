@@ -82,17 +82,51 @@ async function sendSMSNotification(to, message) {
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000', // ✅ Changed from 3001 to 3000
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (origin.includes('vercel.app') || origin.includes('localhost')) {
+        return callback(null, true);
+      }
+      callback(null, true);
+    },
     methods: ['GET', 'POST'],
     credentials: true
   }
 });
 
 // Middleware
+
+// ✅ FIXED CORS Configuration
 app.use(cors({
-  origin: true,
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, curl)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:5174'
+    ];
+    
+    // ✅ Allow ALL Vercel deployments
+    if (origin.includes('vercel.app')) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow all for now during development
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+
+
 app.use(express.json());
 
 // MongoDB Connection
